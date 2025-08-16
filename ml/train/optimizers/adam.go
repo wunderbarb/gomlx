@@ -46,19 +46,35 @@ const (
 
 	// ParamAdamWeightDecay defaults to 0.0. See AdamConfig.WeightDecay.
 	ParamAdamWeightDecay = "adam_weight_decay"
+
+	// ParamAdamBeta1 is the moving average coefficient for the gradient (momentum), the numerator.
+	// The default value is 0.9
+	ParamAdamBeta1 = "adam_beta1"
+
+	// ParamAdamBeta2 is the moving average coefficient for the variance, the denominator.
+	// The default value is 0.999
+	ParamAdamBeta2 = "adam_beta2"
+
+	// ParamAdamBackoffSteps default to 0. Values > 0 prevents any gradient steps to be taken
+	// for those many steps, to allow a better estimate of the momentum and variance.
+	// See AdamConfig.WithBackoffSteps.
+	ParamAdamBackoffSteps = "adam_backoff"
 )
 
-// Adam optimization is a stochastic gradient descent method that is based on adaptive estimation of first-order and
+// Adam optimization is a stochastic gradient descent method based on an adaptive estimation of first-order and
 // second-order moments. According to [Kingma et al., 2014](http://arxiv.org/abs/1412.6980),
 // the method is "*computationally efficient, has little memory requirement, invariant to diagonal rescaling of
 // gradients, and is well suited for problems that are large in terms of data/parameters*".
 //
-// It returns a configuration object that can be used to set its parameters. Once configured call IsNil, and it
-// will return an optimizer.Interface.
+// It returns a configuration object that can be used to set its parameters. Once configured, call AdamConfig.Done,
+// and it will return an optimizer.Interface that can be used with the `train.Trainer` or directly in a custom
+// optimization loop.
 //
 // See [AdamConfig.FromContext] to configure it from the context hyperparameters.
 //
-// Clipping of the gradient updates available by setting the context hyperparameter [ParamClipStepByValue]("clip_step_by_value").
+// Clipping of the gradient updates available by setting the context hyperparameters ParamClipStepByValue("clip_step_by_value")
+// and ParamClipNaN ("clip_nan"). NaN in gradients can be reported by assigning a `nanlogger.NanLogger` to the parameter
+// ParamNanLogger.
 func Adam() *AdamConfig {
 	return &AdamConfig{
 		scopeName:    AdamDefaultScope,
@@ -71,8 +87,31 @@ func Adam() *AdamConfig {
 	}
 }
 
+// RMSProp is an optimizer that divides the learning rate for a weight by a running average
+// of the recent gradients magnitudes (L2) for that weight.
+//
+// It uses Adam to implement it -- it's somewhat equivalent to an Adam without the 1st moment
+// of the gradients.
+//
+// It was described first in the following sources:
+// * https://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf (Hinton)
+// * https://arxiv.org/pdf/1308.0850 (Graves)
+//
+// It returns a configuration object that can be used to set its parameters. Once configured, call AdamConfig.Done,
+// and it will return an optimizer.Interface that can be used with the `train.Trainer` or directly in a custom
+// optimization loop.
+//
+// Clipping of the gradient updates available by setting the context hyperparameters ParamClipStepByValue("clip_step_by_value")
+// and ParamClipNaN ("clip_nan"). NaN in gradients can be reported by assigning a `nanlogger.NanLogger` to the parameter
+// ParamNanLogger.
+func RMSProp() *AdamConfig {
+	c := Adam()
+	c.rmsProp = true
+	return c
+}
+
 // AdamConfig holds the configuration for an Adam configuration, create using Adam(), and once configured
-// call Done to create an Adam based optimizer.Interface.
+// call Done to create an Adam-based optimizer.Interface.
 type AdamConfig struct {
 	scopeName    string
 	dtype        dtypes.DType // If invalid, use the loss type instead.
@@ -82,6 +121,8 @@ type AdamConfig struct {
 	amsGrad      bool
 	adamax       bool    // Works as Adamax.
 	weightDecay  float64 // Works as AdamW.
+	rmsProp      bool    // Works as RMSProp.
+	backoffSteps int
 }
 
 // FromContext will configure Adam with hyperparameters set in the given context.
@@ -97,6 +138,8 @@ func (c *AdamConfig) FromContext(ctx *context.Context) *AdamConfig {
 		c.DType(dtype)
 	}
 	c.WeightDecay(context.GetParamOr(ctx, ParamAdamWeightDecay, 0.0))
+	c.beta1 = context.GetParamOr(ctx, ParamAdamBeta1, 0.9)
+	c.beta2 = context.GetParamOr(ctx, ParamAdamBeta2, 0.999)
 	return c
 }
 
@@ -129,20 +172,23 @@ func (c *AdamConfig) LearningRate(value float64) *AdamConfig {
 	return c
 }
 
-// Betas sets the two moving averages constants (exponential decays). They default to 0.9 and 0.999.
+// Betas set the two moving averages constants (exponential decays). They default to 0.9 and 0.999.
+//
+// The first is for the gradient momentum (the numerator of the step taken), and the second
+// is for the variance of the gradients (denominator).
 func (c *AdamConfig) Betas(beta1, beta2 float64) *AdamConfig {
 	c.beta1, c.beta2 = beta1, beta2
 	return c
 }
 
 // Epsilon used on the denominator as a small constant for stability.
-// For low precision numbers like float16, try a larger value here, like 1e-3.
+// For low-precision numbers like float16, try a larger value here, like 1e-3.
 func (c *AdamConfig) Epsilon(epsilon float64) *AdamConfig {
 	c.epsilon = epsilon
 	return c
 }
 
-// Adamax configure Adam to use a L-infinity (== max, which gives the name) for
+// Adamax configure Adam to use an L-infinity (== max, which gives the name) for
 // the second moment, instead of L2, as described in the same Adam paper.
 func (c *AdamConfig) Adamax() *AdamConfig {
 	c.adamax = true
@@ -157,6 +203,18 @@ func (c *AdamConfig) Adamax() *AdamConfig {
 // TODO: (1) Allow certain variables to be excluded from weight decay (e.g: biases); (2) Allow dynamically calculated weight decay.
 func (c *AdamConfig) WeightDecay(weightDecay float64) *AdamConfig {
 	c.weightDecay = weightDecay
+	return c
+}
+
+// WithBackoffSteps prevents any gradient steps to be taken, until numSteps steps have been taken
+// to allow for a better estimate of the gradient momentums (numerator) and variance of gradients (denominator)
+// before the optimization start.
+//
+// If set to <= 0, no backoff is configured.
+//
+// The default is 0, or the value with
+func (c *AdamConfig) WithBackoffSteps(numSteps int) *AdamConfig {
+	c.backoffSteps = numSteps
 	return c
 }
 
@@ -211,8 +269,22 @@ func (o *adam) UpdateGraphWithGradients(ctx *context.Context, grads []*Node, los
 	lrVar := LearningRateVar(ctx, dtype, lrValue)
 	learningRate := lrVar.ValueGraph(g)
 
+	// Increment the global step, but keep a separate step count for the Adam optimizer -- it can be
+	// reset separately.
 	_ = IncrementGlobalStepGraph(ctx, g, dtype) // LoopStep, not used by this optimizer, but updated.
 	adamStep := IncrementGlobalStepGraph(ctx.In(o.config.scopeName), g, dtype)
+
+	// Back-off steps to allow a better estimate of momentum and variance, before actually taking
+	// a gradient step.
+	if o.config.backoffSteps > 0 {
+		backoffSteps := ConstAsDType(g, adamStep.DType(), o.config.backoffSteps)
+		learningRate = Where(
+			GreaterThan(adamStep, backoffSteps),
+			learningRate,
+			ScalarZero(g, learningRate.DType()))
+	}
+
+	// Calculate the debias moving average coefficients (betas)
 	beta1 := Const(g, shapes.CastAsDType(o.config.beta1, dtype))
 	debiasTermBeta1 := Inverse(OneMinus(Pow(beta1, adamStep)))
 	beta2 := Const(g, shapes.CastAsDType(o.config.beta2, dtype))
@@ -243,22 +315,32 @@ func (o *adam) UpdateGraphWithGradients(ctx *context.Context, grads []*Node, los
 // If `Adamax` is set, we use instead moment2 to store the L-infinity (the max) of the gradient.
 func (o *adam) applyAdamGraph(ctx *context.Context, g *Graph, v *context.Variable, dtype dtypes.DType, grad *Node,
 	learningRate, beta1, debiasTermBeta1, beta2, debiasTermBeta2, epsilon *Node) {
+	rmsProp := o.config.rmsProp // If set, don't use 1st momentum.
 	m1Var, m2Var := o.getMomentVariables(ctx, v, dtype)
-	moment1, moment2 := m1Var.ValueGraph(g), m2Var.ValueGraph(g)
+	var moment1 *Node
+	if !rmsProp {
+		moment1 = m1Var.ValueGraph(g)
+	}
+	moment2 := m2Var.ValueGraph(g)
 
 	// Adam runs on a fixed dtype -- defaults to the dtype of the loss, but it can be configured.
 	// We convert the grad to the dtype used by Adam for its computation.
 	if grad.DType() != dtype {
 		grad = ConvertDType(grad, dtype)
 	}
+	TraceNaNInGradients(ctx, v, grad)
 	grad = ClipNaNsInGradients(ctx, grad)
 
-	// Do gradient step with momentum.
-	moment1 = Add(
-		Mul(beta1, moment1),
-		Mul(OneMinus(beta1), grad))
-	m1Var.SetValueGraph(moment1)
-	debiasedMoment1 := Mul(moment1, debiasTermBeta1)
+	// Do the gradient step with momentum.
+	// The momentum is disabled (we simply take the gradien) if rmsProp is set.
+	debiasedMoment1 := grad
+	if !rmsProp {
+		moment1 = Add(
+			Mul(beta1, moment1),
+			Mul(OneMinus(beta1), grad))
+		m1Var.SetValueGraph(moment1)
+		debiasedMoment1 = Mul(moment1, debiasTermBeta1)
+	}
 
 	var denominator *Node
 	if o.config.adamax {
@@ -321,7 +403,9 @@ func (o *adam) getMomentVariables(ctx *context.Context, trainable *context.Varia
 	shape := trainable.Shape().Clone()
 	shape.DType = dtype
 	ctx = ctx.Checked(false) // It shouldn't matter if it's the first time or not creating the variable.
-	m1 = ctx.InAbsPath(scopePath).WithInitializer(initializers.Zero).VariableWithShape(m1Name, shape).SetTrainable(false)
+	if !o.config.rmsProp {
+		m1 = ctx.InAbsPath(scopePath).WithInitializer(initializers.Zero).VariableWithShape(m1Name, shape).SetTrainable(false)
+	}
 	m2 = ctx.InAbsPath(scopePath).WithInitializer(initializers.Zero).VariableWithShape(m2Name, shape).SetTrainable(false)
 	return
 }

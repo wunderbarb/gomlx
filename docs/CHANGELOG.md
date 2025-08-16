@@ -1,6 +1,32 @@
 # GoMLX changelog
 
-# Next: MultiHeadAttention implementation slightly changed!
+# v0.21.1: 2025/08/16 Added Zero-dim tensors support and other small improvements. 
+
+* Package `tensors` and `graph`:
+  * Added support for zero-dim tensors.
+* Package `backends`:
+  * Method **`New()` will return an error (as opposed to panic)**.
+    The temporarily `NewOrErr` was marked as deprecated, use `New` instead.
+* Package `optimizers`:
+  * New `AdamConfig.WithBackoffSteps()` (or the hyperparameter `adam_backoff`) that prevents gradient steps
+    from being taken until the given number of steps has executed. This allows a better estimate (moving average) of
+    the gradients ("momentum") and their variances to be calculated before applying them.
+  * New `optimizers.ParamAdamBeta1` and `optimizers.ParamAdamBeta2` hyperparameters to control Adam beta1 and beta2
+    hyperparameters.
+* Package `context`:
+  * Added `Variable.DType()`.
+  * Variable `#rngstate` marked as non-trainable during creation.
+* `gomlx_checkpoints`:
+  * Added `-perturb`.
+  * Now it has its own `go.mod`, so it separated the dependencies.
+* Docker:
+  * Included `openssh-client` (ssh) and `dlv` (Go debugger) by default.
+* `SimpleGo` ("go") backend:
+  * Fixed mishandling of multi-output operations and race condition on parallel execution (#197)
+  * Refactoring and clean up of execution loops.
+  * Separated `TestDotGeneral_PerformanceTable` behind the build tag `perf`.
+
+# v0.21.0: 2025/07/01 🌞 Summer Edition 🌞
 
 * Package `simplego`:
   * Added `GetBackend` that returns a singleton backend, created with the default configuration at the first request.
@@ -9,15 +35,23 @@
   * Added `FormatDuration` to pretty-print duration.
 * Package `graph`
   * Added gradients of `Cos` and `Sin` that were missing.
-  * Fixed extra empty line in auto-generate functions comments that was preventing the documentation
-    to be generated.
-* Package `ml/trainer`
+  * Fixed (removed) the extra empty line in auto-generate functions comments that was preventing the documentation
+     from being assigned to the functions.
+  * Added parameters `sorted` and `unique` to `Scatter` (like the other functions `Scatter*`) -- **Small API change**.
+  * Added `ScatterUpdate`, for now only for `unique=true`.
+  * Package `nanlogger`:
+    * Allow traces that only report also.
+    * Created context parameter `optimizer.ParamNanLogger`: if set to NanLogger, it will trace all occurrences of
+      of NaN values in gradient: great to debug where are the NaN appearing in the model first.
+* Package `ml/train`:
   * Improved support for accumulated gradients. Fixed evaluation (context reuse) for when using accumulated gradients.
   * Added `Trainer.WithMaxExecutors`.
-* Package `ml/trainer/metrics`:
-  * `MeanMetric` allows for disabling dynamic batch weighting. API slightly changed: `NewMeanMetric` now
+* Package `ml/train/metrics`:
+  * `MeanMetric` allows for disabling dynamic batch weighting.  API slightly changed: `NewMeanMetric` now
     returns a `MeanMetric` struct, not an interface.
   * Added `StreamingMedianMetric`.
+* Package `ml/train/optimizers`:
+  * Added `RMSProp()` optimizer.
 * Package `ml/layers`
   * Added normalizing 1/sqrt(d_k) factor to attention logits in the MultiHeadAttention layer: this will break current
     models using it.
@@ -25,16 +59,23 @@
 * `gomlx_checkpoints` command-line tool:
   * Added support for multiple models to allow comparing models.
   * Fixed the printing of metrics with tiny values.
+* Package `context`:
+  * Allow VariableInitializers to use the `context.Context` itself, with its own random initializer.
+  * `DefaultInitializer` now creates an initializer. The new default uses He initializer, the same used in PyTorch.
+  * Package `initializers`:
+    * They now use the `context` random number generator state, which simplifies things.
+    * `ParamInitialSeed` removed, since the RNG is initialized by `Context.RngStateWithSeed()`.
+* Fixed some flaky tests.
 
-# v0.20.1: 2025/06/12 Trainer.AccumulateGradients (when the batch doesn't fit memory); VNN fixes; Numpy improvements. 
+# v0.20.1: 2025/06/12 Trainer.AccumulateGradients (when the batch doesn't fit memory); VNN fixes; Numpy improvements.
 
 * Package `train`:
   * Better handling of loss (without regularization) in metrics. Added `SetLossNoRegularization` and `GetLossNoRegularization`.
-  * Added `Trainer.AccumulateGradients(n)` to accumulate n steps of gradients before applying them. This is useful if 
+  * Added `Trainer.AccumulateGradients(n)` to accumulate n steps of gradients before applying them. This is useful if
     the desired batch size doesn't fit in memory, so it accumulates the gradients until the virtual batch size gradient
     is calculated.
 * Package `optimizers`:
-  * Added support for the new `train.OptimizeWithGradients` interface, to support gradient accumulators. 
+  * Added support for the new `train.OptimizeWithGradients` interface, to support gradient accumulators.
   * Cleaned up `StochasticGradientDescent` API. Added option to disable decay for testing.
 * Pacakge `vnn`:
   * Added `Config.Scaler` to add a scaler operator just after the linear projection of a layer. It allows the VNN
@@ -50,7 +91,7 @@
     And if it has, it panics with a meaningful error message.
   * Added integration tests.
 
-# v.0.20.0: Small API change: `backends.NewWithConfig()` changed to return an error. 
+# v.0.20.0: Small API change: `backends.NewWithConfig()` changed to return an error.
 
 * Package `backends`:
   * **API CHANGE**: Method `NewWithConfig()` changed
@@ -65,7 +106,7 @@
   * Fixed bug introduced in parallelize version of Erf(x).
 * Package `tensors`:
   * Added `Tensor.ToLocal()` to detach a tensor from its backend.
-* Package `ui/gonb/plotly`: 
+* Package `ui/gonb/plotly`:
   * Update dependencies to new go-plotly v0.7.0 (many changes to the API), while preserving as much as possible
     the GoMLX api offered.
 * Updated example notebooks to use `github.com/gomlx/gomlx/backends/default` (instead of only `/xla`) and to
@@ -80,11 +121,11 @@
     * Version for small inner matrices, with block iteration and loop unrolling.
     * Version for larger inner matrices: re-package inputs in ~4K blocks, and recursively partition matrices.
     * Added parallelization: at batch level and in the partitioning in the larger matrices.
-  * Parallel execution of the Ops: that helps a lot during training (cut the training time almost in half for the adult 
-    dataset), but it may hurt inference if you are running many batches in parallel. 
+  * Parallel execution of the Ops: that helps a lot during training (cut the training time almost in half for the adult
+    dataset), but it may hurt inference if you are running many batches in parallel.
     So it dynamically decides to run sequentially or in parallel depending on the number of computations
     being executed concurrently.
-    Added also configurations `GOMLX_BACKEND=go:ops_sequential` and `GOMLX_BACKEND=go:ops_parallel` 
+    Added also configurations `GOMLX_BACKEND=go:ops_sequential` and `GOMLX_BACKEND=go:ops_parallel`
     to force one type of execution or another.
   * Parallelized Erf(x): this will become a model on how to parallelize other unary functions — probably
     when SIMD is available.
@@ -97,13 +138,13 @@
 * Package `tensors`
   * Fixed pretty-print of booleans.
 
-# v0.19.3: 2024/05/20 Many SimpleGo improvements. 
+# v0.19.3: 2024/05/20 Many SimpleGo improvements.
 
 * v0.19.2 skipped ... issues with the release.
 * Package `simplego`:
   * Fixed `Gather` of scalar values.
   * Fixed `Where` checking of shape.
-  * New ops: `NotEqual`, `Erf`, `ArgMinMax`, `ReduceWindow`, `ReduceBitwise{And,Or,Xor}` and 
+  * New ops: `NotEqual`, `Erf`, `ArgMinMax`, `ReduceWindow`, `ReduceBitwise{And,Or,Xor}` and
     `ReduceLogical{And,Or,Xor}`
   * Fixed initialization of re-used buffers where needed.
 * Package `backends/default`:
@@ -158,7 +199,7 @@
 * Package `tensors`:
   * Added `Tensor.Clone` and `Tensor.OnDeviceClone`.
 * Package `context`:
-  * Removed deprecated `NewContext` 
+  * Removed deprecated `NewContext`
   * Added `Variable.CloneToContext`
   * Added `Context.Clone`
   * Variable graphToNodeId is now a `xsync.SyncMap`, solving issues for concurrency of multiple graphs being
@@ -168,14 +209,14 @@
 
 # v0.18.0: Ragged2D; XLA update; Fixed Scatter functions; Fixed memory leaks.
 
-* XLA Backend: 
+* XLA Backend:
   * Updated dependency to newest Gopjrt 0.6.3: small memory leak fixes
   * Updated CPU PJRT and XlaBuilder
   * Fixed Scatter* functions.
 * Package `graph`:
   * Fixed `ScatterSum` (renamed from the now deprecated `ScatterAdd`), `ScatterMax` and `ScatterMin`. No gradients for `ScatterMax` and `ScatterMin` yet.
   * Added `Ragged2D` with some utilities, in particular `Ragged2D.Softmax`.
-  * `DefaultNodeLogger` now accepts the `#full ` prefix that forces printing the full value of a tensor, 
+  * `DefaultNodeLogger` now accepts the `#full ` prefix that forces printing the full value of a tensor,
     in Go-code format.
 
 # v0.17.1: 2025/02/26 CosineSimilarity, Bitcast and many fixes and improvements.
@@ -201,7 +242,7 @@
   * Created `ExecPerStepUpdateGraphFn` for those creating custom "TrainStep" functions.
 * Package `ml/train/losses`:
   * Triplet losses now work with context.
-  * `CheckExtraLabelsForWeightsAndMask` now (1) accepts weights and mask in any order; (2) normalize weights such that the sum is (non-masked) bathSize, 
+  * `CheckExtraLabelsForWeightsAndMask` now (1) accepts weights and mask in any order; (2) normalize weights such that the sum is (non-masked) bathSize,
     preserving the ratio. This way the mean will be 1.
   * Losses with masks and weights fixed so weights/mask can be given in any order.
     Also, now using MaskedReduceMean if there is a mask, and all losses return a scalar.
@@ -227,11 +268,11 @@
 * Package `nanlogger`:
   * Store only the stack-trace, and trim the stack into the nanlogger package.
   * Does not exit, simply report the NanLogger. User can define a handler, if they want the training to exit.
-  * Use `IsFinite` to check for NaN and Infs: but we loose the type of NaN that happened.  
+  * Use `IsFinite` to check for NaN and Infs: but we loose the type of NaN that happened.
   * Fixed nanlogger for Float16 and BFloat16; Also, it first prints other logged tensors, before failing with a NaN.
-* Package `losses`: 
+* Package `losses`:
   * Added `ParamLoss`: hyperparameter to define the loss, and many constant values.
-  * Added `LossFromContext`, using `ParamLoss` hyperparameter. 
+  * Added `LossFromContext`, using `ParamLoss` hyperparameter.
   * Added `MakeHuberLossFromContext`
   * Added experimental `MakeAdaptivePowerLoss` and `MakeAdaptivePowerLossFromContext`
   * Added TripletLoss: various negative sampling strategies and distance metrics.
@@ -239,7 +280,7 @@
   * More unit tests.
   * Aliases nodes: allow setting aliases to nodes, and to retrieve them by those aliases. Useful for layers
     or models to export intermediary nodes by their aliases. They are prefixed by scope. New methods are:
-    `Node.WithAlias`, `Node.GetAlias`, `Graph.GetNodeByAlias`, `Graph.PushAliasScope`, `Graph.PopAliasScope` 
+    `Node.WithAlias`, `Node.GetAlias`, `Graph.GetNodeByAlias`, `Graph.PushAliasScope`, `Graph.PopAliasScope`
     and `Graph.IterAliasedNodes`.
   * Added optional aliases nodes for `inceptionv3` model.
   * Added `ReduceSkewness` and the alias `Skewness`.
@@ -283,7 +324,7 @@
   * Fixed model scope issue.
   * Fixed KAN model issue.
 * Added `checkpoints.Load()`: just like `checkpoints.Build`, but it complains if a checkpoint doesn't exist.
-* Package `graph`: 
+* Package `graph`:
   * Added `ReduceVariance` and an alias `Variance`. Fixed `ReduceAndKeep` if no axes are given.
   * Added `Stack`: similar to `Concatenate` but it creates a new axis.
 * BSpline(Standard)-KAN:
@@ -294,7 +335,7 @@
 * Added `layers/lstm` to create LSTM layers (experimental), in use by ONNX conversion to GoMLX.
 * Updated dependencies; gopjrt v0.4.7.
 
-# v0.15.1 - 2024/11/11 Updated downloader, in support for 
+# v0.15.1 - 2024/11/11 Updated downloader, in support for
 
 * Updated dependency to **gopjrt** 0.4.5
 * Moving package `huggingface` and `downloader` to "github.com/gomlx/go-huggingface": marked as deprecated.
@@ -328,7 +369,7 @@
   * **BREAKING CHANGE**: Refactored all UI tools under `ui` directory. It only requires changing the import, the APIs are not changed.
   * New package `fyneui`, a window based training UI built using Fyne.io (EXPERIMENTAL)
 * Package `commandline`:
-  * `ParseContextSettings` now allows parsing settings from a text file. 
+  * `ParseContextSettings` now allows parsing settings from a text file.
   *  Fixed `SprintContextSettings` for scoped hyperparameters.
   *  Added `SprintModifiedContextSettings` to enumerate only hyperparameters set on the command line.
 * New package `cosineschedule`, refactored from `optimizers` package.
@@ -336,7 +377,7 @@
     as fractions of the total number of steps being trained.
 * Package `train`:
   * Extensions to `Dataset` interface through additional interfaces.
-  * Added optional `IsOnwershipTransfer() bool` that allows a Dataset to specify it should maintain ownership of the 
+  * Added optional `IsOnwershipTransfer() bool` that allows a Dataset to specify it should maintain ownership of the
     yielded tensors.
 * Updated `gopjrt` v0.4.4 with the static XlaBuilder library, and experimental support for Apple/Metal.
 
@@ -344,7 +385,7 @@
 
 * Package `initializers`
   * All random initializers (`RandomUniformFn`, `RandomUniformFn`, `RandomNormalFn`, `GlorotUniformFn`, `XavierUniformFn`)
-    changed to take the context as a parameter, instead of `initialSeed`. 
+    changed to take the context as a parameter, instead of `initialSeed`.
   * The `initialSeed` is instead read from the hyperparameter `initializers.ParamInitialSeed` ("initializers_seed")
     and default to `initializers.NoSeed` (0), which means the seed is randomly started.
 * Added learnable rational functions (ml/layers/rational): can be used for activations or as univariate learnable
@@ -356,7 +397,7 @@
   * Added `ConsecutiveDifference`, `SliceAxis`, `BitsCount`, `IsFinite`.
 * Package `context`:
   * Added `context.ExecOnce` and `context.ExecOnceN`.
-  * `context.GetParamOr` now returns the default value for a hyperparameter, if it is set to nil. 
+  * `context.GetParamOr` now returns the default value for a hyperparameter, if it is set to nil.
 * Package `train`:
   * Added `GetTrainLastStepVar` with information about last step of training: used for setting up various schedules.
   * Added `ResetComputationGraphs` to allow the trainer to recreate computation graphs, if hyperparameters change in the middle
@@ -411,7 +452,7 @@
 * Added `tensors.FromScalar`
 * Updated to gopjrt v0.3.0
 * Package `graph`:
-  * Added `ExecOnce` and `ExecOnceN` 
+  * Added `ExecOnce` and `ExecOnceN`
   * Added `CumSum`
   * `ConvertDType` to the same dtype is now a no-op.
   * Added `LogicalAll` and `LogicalAny`
@@ -423,7 +464,7 @@
   * Fixed unnecessary copying of tensor data in `Tensor.MaterializeOnDevices`
 * Small fixes to documentation.
 
-## 0.11.0 BREAKING CHANGE: Multi-Backend support; Added XLA/PJRT support (with gopjrt); meaningful speed ups; No more C code (all goes through gopjrt) 
+## 0.11.0 BREAKING CHANGE: Multi-Backend support; Added XLA/PJRT support (with gopjrt); meaningful speed ups; No more C code (all goes through gopjrt)
 
 * MAJOR REFACTORING. Many breaking compatibility changes -- it would be a major release number change, if it were > v1 already.
 * New package `backends`: no GoMLX can support different backends -- but for now only xla is implemented.
@@ -447,7 +488,7 @@
     * Included bspline GoMLX implementation.
   * Added sub-package `regularizers` with automatic regularizer configuration. Layers `Dense`, `DenseWithBias` and `kan` use it by default.
   * Added sub-package `activations` -- just a refactor of the code already in layers.
-  * Added sub-package `batchnorm`: refactored out batch normalization code. 
+  * Added sub-package `batchnorm`: refactored out batch normalization code.
     * Added `batchnorm.AveragesUpdate` to update the average of the means and variances used for normalization.
       Also connected it to evaluation in plots libraries.
 * Package `initializers`:
@@ -456,7 +497,7 @@
   * Fixed `CategoricalCrossEntropyLogits` and `SparseCategoricalCrossEntropyLogits`.
   * Added `MakeHuberLoss`
 * Package `metrics`:
-  * Fixed 
+  * Fixed
 * Package `exceptions` moved to a separate repository in [`github.com/gomlx/exceptions`](github.com/gomlx/exceptions).
 * Package `slices` renamed to `xslices`, not to mix up with the new standard pacakge `slices`.
 * Package `tensors/image` renamed `tensors/images`.
@@ -490,7 +531,7 @@
   * Fixed `Variable.SetValuePreservingOld` when shapes change.
   * Fixed checking of loaded variables -- that they are not newly created.
 * Package `optimizers`:
-  * Fixed optimizer constructor `FromContext` to allow further configuration of the optimizer by setting other hyperparameters into context.   
+  * Fixed optimizer constructor `FromContext` to allow further configuration of the optimizer by setting other hyperparameters into context.
   * Added hyperparameter `clip_step_by_value`, a clip by value applied to gradient updates.
   * `Adam` optimizer: `"clip_step_by_value", "adam_epsilon", "adam_dtype"` hyperparameters support.
   * **`MustOptimizerByName` now takes also the context for the optimizer hyperparameters.** -- this breaks the API.
@@ -518,8 +559,8 @@
 * Binary GOMLX+XLA distribution:
   * Now requires package `libnccl > 2.21` to be installed.
   * Updated to CUDA version `12.3` and Cudnn `8.9`.
-  * Newer version GPU performance measured on a GNN model improved significantly (In one model the median train step went from 160ms to 110ms). 
-    On CPUs measured on the "CSI Adult" dataset remained the same. 
+  * Newer version GPU performance measured on a GNN model improved significantly (In one model the median train step went from 160ms to 110ms).
+    On CPUs measured on the "CSI Adult" dataset remained the same.
 * Open Graph Benchmark OGBN-MAG dataset support and example models (FNN and GNN).
   * Added sampler library.
 * Package `graph`:
@@ -546,14 +587,14 @@
   * `Make(dtype, dimensions...)` now makes a copy of the `dimensions` slice given.
 * `exceptions`: refactoring to use separate package `github.com/gomlx/exceptions`.
 * Package `layers`:
-  * Added `...FromContext` family of functions, that apply layers according to parameters set in the context: 
+  * Added `...FromContext` family of functions, that apply layers according to parameters set in the context:
     `ActivationFromContext`, `DropoutFromContext`, `NormalizeFromContext` and `MaskedNormalizeFromContext`.
   * `LayerNormalization`: fixed shaping bug, and renamed `scale` to `gain`, more aligned with [original paper](https://arxiv.org/pdf/1607.06450v1.pdf)
     * **This will break previous models using LayerNormalization!**: this is not taken lightly, but as it is, it
       is wrong and depending on the shape it may be adversely affecting some models.
   * `LayerNormalization`: added `Mask` support; added defaults from context parameters.
   * `DropoutStatic`: Dropout api where one can pass a static dropout rate as a Go float.
-  * `AddL2RegularizationStatic`: Add L2 regularization on values, where the amount of regularization is static. 
+  * `AddL2RegularizationStatic`: Add L2 regularization on values, where the amount of regularization is static.
 * Package `optimizers`:
   * Added `CosineAnnealingSchedule.FromContext`. New `MinLearningRate` is 0.0 (same used in Keras).
 * Package `losses`:
@@ -565,7 +606,7 @@
     memory usage. It replaces `loop.FreeInput()`
 * Package `commandline`:
   * `AttachProgressBar` now displays a continuously updated table with metrics generated during training.
-    This only works in the commandline (not in notebooks). 
+    This only works in the commandline (not in notebooks).
   * Asynchronous display of updates: it works better with very fast training loops or if running
     over a slow terminal connection (network).
   * Added `CreateContextSettingsFlag` and `ParseContextSettings`.
@@ -589,26 +630,26 @@
 * Package `context`:
   * Added `context.GetParamOr` and `context.GetGraphParamOr`: it uses generics to cast to the desired type, and allowing a default value to be returned.
   * Added `Context.DeleteVariable` and `Context.DeleteVariablesInScope`.
-* Package `checkpoints`: 
+* Package `checkpoints`:
   * Added recovery of some basic types (numeric and slices) when loading params from Json.
   * Added unique incrementing id to checkpoint file names.
 * Package `exceptions`: special case runtime panics to preserve its stack-trace.
-* Package `train`: 
+* Package `train`:
   * `Loop` automatically sets LoopStep to context's "global_step" parameter.
   * Models (e.g.: unsupervised) can return `nil` for predictions.
-* Package `optimizer`: 
+* Package `optimizer`:
   * Added `GetGlobalStep`.
   * Interface now include `Clear(ctx)` to clear all variables used by an optimizer --> this also breaks
-    compatibility for any custom optimizer, unfortunately. 
+    compatibility for any custom optimizer, unfortunately.
     But if it broke you, it should be a very easy fix, since most optimizers use a fixed scope for its variables, and
     `Context.DeleteVariablesInScope` will do the job.
   * Added `DeleteGlobalStep`.
 * Package `context`: Added `Context.EnumerateVariablesInScope()` method.
 * Package `graph`:
   * Added optional `reduceAxes` parameter to `L2Norm` and `L1Norm`.
-  * Added `L2NormSquare`, `L2Normalize` and `L2NormalizeWithEpsilon`. 
+  * Added `L2NormSquare`, `L2Normalize` and `L2NormalizeWithEpsilon`.
 * Package `nanlogger`: added `AttachToTrainer`; improved docs.
-* Package `margaid`: 
+* Package `margaid`:
   * automatic ending plot when loop finishes.
   * option to plot evaluation losses separately from training losses -- for when they include different terms.
 * Example "Dogs vs Cats":
@@ -626,7 +667,7 @@
 ## v0.7.1 - 2023/10/26
 
 * Fixed search of CUDA paths under /usr/local.
-* Fixed(?) XLA ShapedBuffers issue causing spurious crashes after update. 
+* Fixed(?) XLA ShapedBuffers issue causing spurious crashes after update.
 * JupyterLab docker image uses gomlx_xla C library from local disk (as opposed to downloading it).
 
 ## v0.7.0 - 2023/10/25
@@ -643,15 +684,15 @@
 ## v0.6.0 - 2023/08/07
 
 * FFT, RealFFT, InverseFFT and InverseRealFFT operations.
-  * Added a small notebook demo for FFT. 
+  * Added a small notebook demo for FFT.
 * Added Complex/Imag/Real/Conj operations to manipulate complex numbers (and their gradients).
 * Added support for complex numbers for ConvertType. Defined gradient for ConvertType.
 * Added Complex128 and Complex64 dtypes support.
 * Added "spacers" (like "*" for axis ranges) and `AxisElem()` for `Slice()`.
-* Package `examples/notebook/gonb/margaid`: Added `Plots.AddValues` and `Plots.PlotToHTML`; 
+* Package `examples/notebook/gonb/margaid`: Added `Plots.AddValues` and `Plots.PlotToHTML`;
   Fixed `Plots` returned by `New()` to be linear scale by default.
-* Included build of tcmalloc (`gperftools`) from the `c/` directory, when building `libgomlx_xla.so`. 
-  Still the `libtcmalloc.so` is needed in runtime. 
+* Included build of tcmalloc (`gperftools`) from the `c/` directory, when building `libgomlx_xla.so`.
+  Still the `libtcmalloc.so` is needed in runtime.
   A copy is included in the `gomlx_xla.tar.gz` package (under `lib/gomlx`) and can be copied from there if needed.
   This enables build for Macs — see #23.
 
@@ -661,7 +702,7 @@
   affecting most of the code.
 * Added `NewManager`, a simpler interface to create a `Manager` object with defaults.
 * Added `margaid.NewDeafult`, simplifying adding of plots for the default cases.
-* Examples: 
+* Examples:
   * UCI-Adult: replaced `adult.Dataset` to the much simpler and powerful `data.InMemoryDataset`.
 * Remove `tensor.Local.Data()`: now all access is done throw the `tensor.Local.AcquireData()` and release, to
   prevent a race condition with the garbage collector.
@@ -672,8 +713,8 @@
 * Diffusion example: Added conditioning on flower type; Improved documentation; several other small improvements.
 * NanLogger: added tool to report back (with stack trace and scope) on the occurrences of NaN/Inf in the computation
   graph.
-* Checkpoints: added `Handler.LoadedVariables()` method for inspection of loaded checkpoint. 
-* Bug fixes: 
+* Checkpoints: added `Handler.LoadedVariables()` method for inspection of loaded checkpoint.
+* Bug fixes:
   * RandomNormal: fixed rare numerical issues in RandomNormal, that would generate -Inf.
   * Context: some rare condition on feeding variable values to executor.
   * InMemory dataset: handling cases where dataset returns the same tensor as input and label.
@@ -682,7 +723,7 @@
 ## v0.4.0
 
 * Models: Diffusion example model (working draft); added Kernel Inception Distance (KID) metric implementation.
-* Contexts: added `context.NumParameters()`, `context.Memory()`, `context.RandomUniform`, `context.RandomNormal`, 
+* Contexts: added `context.NumParameters()`, `context.Memory()`, `context.RandomUniform`, `context.RandomNormal`,
   `context.RngStateWithSeed` and `context.RngStateReset`.
 * Random numbers revamped, making graph purely functional. Also, 'context.Context' provides
   the facilities to carry around random number generator state.
@@ -692,7 +733,7 @@
 * Layers: Added `layers.Activation` that takes the activation type as a string (easy to plug to a flag).
 * Metrics: added context as the first parameter to `metrics.BaseMetricGraph`.
 * Plots (margaid): added support for saving and restoring points (when continue training); optional log-scale plots;
-  allow for arbitrary rate of updates; added support for loading data from multiple models. 
+  allow for arbitrary rate of updates; added support for loading data from multiple models.
 * Losses: added `losses.MeanAbsoluteError`.
 * Optimizers: added `optimizers.GetGlobalStepVar`.
 * Training loop (`train.Loop`): added `MeanTrainingStepDuration()`; check for infinity and "nan" losses -- training
@@ -718,11 +759,11 @@
 * Skip evaluation during test of demos.
 * Fixed dogsvscat demo's inconsistent mixed datasets issue, by yielding a correct spec.
 * Added SumPool and MeanPool
-* Changed API for defining images channels axis configuration (in pooling and convolution operations). 
+* Changed API for defining images channels axis configuration (in pooling and convolution operations).
 
 ## v0.2.1, 2023-05-20
 
-* Tensors: clean up, fixed memory race (with Go's GC not knowing about and C++ pointers), improved 
+* Tensors: clean up, fixed memory race (with Go's GC not knowing about and C++ pointers), improved
   docs and test.
 * Created tests from the Adult, Cifar, "Dog vs Cats" and Imdb demos.
 
@@ -743,7 +784,7 @@
 * Small fixes to example notebooks.
 * Added documentation to the various dataset libraries.
 * Renamed release asset not to include the version name to simplify downloading the latest one.
-* Updated `docker/jupyterlab` for the new release. 
+* Updated `docker/jupyterlab` for the new release.
 
 ## v0.1.0, 2023-04-28
 

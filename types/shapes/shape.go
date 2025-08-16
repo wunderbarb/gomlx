@@ -97,8 +97,8 @@ type Shape struct {
 func Make(dtype DType, dimensions ...int) Shape {
 	s := Shape{Dimensions: slices.Clone(dimensions), DType: dtype}
 	for _, dim := range dimensions {
-		if dim <= 0 {
-			exceptions.Panicf("shapes.Make(%s): cannot create a shape with an axis with dimension <= 0", s)
+		if dim < 0 {
+			exceptions.Panicf("shapes.Make(%s): cannot create a shape with an axis with dimension < 0", s)
 		}
 	}
 	return s
@@ -166,6 +166,20 @@ func (s Shape) Size() (size int) {
 		size *= d
 	}
 	return
+}
+
+// IsZeroSize returns whether any of the dimensions is zero, in which case
+// it's an empty shape, with no data attached to it.
+//
+// Notice scalars are not zero in size -- they have size one, but rank zero.
+func (s Shape) IsZeroSize() bool {
+	for _, d := range s.Dimensions {
+		if d == 0 {
+			return true
+		}
+	}
+	return false
+
 }
 
 // Memory returns the memory used to store an array of the given shape, the same as the size in bytes.
