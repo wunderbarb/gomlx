@@ -52,7 +52,8 @@ func (f *Function) ConvGeneral(inputOp, kernelOp backends.Value, axes backends.C
 	}
 	input, kernel := inputs[0], inputs[1]
 
-	outputShape, err := shapeinference.ConvGeneralOp(input.shape, kernel.shape, axes, strides, paddings, inputDilations, kernelDilations, channelGroupCount, batchGroupCount)
+	outputShape, err := shapeinference.ConvGeneralOp(input.shape, kernel.shape, axes, strides, paddings,
+		inputDilations, kernelDilations, channelGroupCount, batchGroupCount)
 	if err != nil {
 		fmt.Printf("ConvGeneral: input=%s, kernel=%s, output=%s, axes=%+v, strides=%v, paddings=%v, inputDilations=%v, kernelDilations=%v, channelGroupCount=%d, batchGroupCount=%d\n",
 			input.shape, kernel.shape, outputShape, axes, strides, paddings, inputDilations, kernelDilations, channelGroupCount, batchGroupCount)
@@ -138,7 +139,7 @@ type convNode struct {
 
 // EqualNodeData implements nodeDataComparable for convNode.
 func (c *convNode) EqualNodeData(other nodeDataComparable) bool {
-	o := other.(*convNode)
+	o, _ := other.(*convNode)
 	if c.channelGroupCount != o.channelGroupCount ||
 		c.batchGroupCount != o.batchGroupCount ||
 		c.hasInputDilations != o.hasInputDilations ||
@@ -181,7 +182,7 @@ func (f *Function) ConvGeneralDilated(inputOp, kernelOp backends.Value, axes bac
 // execConvGeneral executes the DotGeneral by first normalizing and repackaging the tensors into blocks.
 func execConvGeneral(backend *Backend, node *Node, inputs []*Buffer, _ []bool) (*Buffer, error) {
 	input, kernel := inputs[0], inputs[1]
-	params := node.data.(*convNode)
+	params, _ := node.data.(*convNode)
 	outputShape := node.shape
 	dtype := input.shape.DType
 	output, err := backend.getBufferForShape(outputShape)
@@ -210,12 +211,13 @@ func execConvGeneral(backend *Backend, node *Node, inputs []*Buffer, _ []bool) (
 		params:      params,
 	}
 	var convFn func(convGeneralExecPlan) error
-	if params.hasInputDilations || params.hasKernelDilations || params.channelGroupCount > 1 || params.batchGroupCount > 1 {
+	if params.hasInputDilations || params.hasKernelDilations || params.channelGroupCount > 1 ||
+		params.batchGroupCount > 1 {
 		// Full version.
-		convFn = convDTypeMap.Get(dtype).(func(convGeneralExecPlan) error)
+		convFn, _ = convDTypeMap.Get(dtype).(func(convGeneralExecPlan) error)
 	} else {
 		// Faster, but no dilation or grouping version.
-		convFn = convNoDilationDTypeMap.Get(dtype).(func(plan convGeneralExecPlan) error)
+		convFn, _ = convNoDilationDTypeMap.Get(dtype).(func(plan convGeneralExecPlan) error)
 	}
 
 	if err := convFn(plan); err != nil {
