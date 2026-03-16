@@ -469,10 +469,14 @@ func execDotGeneral(backend *Backend, node *Node, inputs []*Buffer, _ []bool) (*
 			if backend.enableHighway && isMatMulOrder(lhsRaw.shape, params.lhsContractingAxes, params.lhsBatchAxes,
 				rhsRaw.shape, params.rhsContractingAxes, params.rhsBatchAxes) &&
 				highway.HasDTypeSupport(inputDType, inputDType) {
+				bufAllocAnyFn, err1 := getAnyBufAllocator(backend, inputDType)
+				if err1 != nil {
+					return nil, err1
+				}
 				err = highway.MatMulDynamic(inputDType, outputShape.DType, lhsRaw.flat, rhsRaw.flat,
 					params.batchSize, params.lhsCrossSize, params.rhsCrossSize, params.contractingSize,
 					output2.flat,
-					getAnyBufAllocator(backend, inputDType), getBufReleaser(backend), backend.workers)
+					bufAllocAnyFn, getBufReleaser(backend), backend.workers)
 				if err == nil {
 					err = dotGeneralCheckVersions(backend, lhs, rhs, params, output, output2)
 				}
@@ -506,10 +510,15 @@ func execDotGeneral(backend *Backend, node *Node, inputs []*Buffer, _ []bool) (*
 		// Custom GEMM path for large "malmul" order.
 		inputDType := lhs.shape.DType
 		outputDType := output.shape.DType
-		if err = packgemm.GEMMDynamic(inputDType, outputDType, 1, 0, lhs.flat.([]float32), rhs.flat.([]float32),
+		bufAllocAnyFn, err1 := getAnyBufAllocator(backend, inputDType)
+		if err1 != nil {
+			return nil, err1
+		}
+		if err = packgemm.GEMMDynamic(inputDType, outputDType, 1, 0, lhs.flat.([]float32),
+			rhs.flat.([]float32),
 			params.batchSize, params.lhsCrossSize, params.rhsCrossSize, params.contractingSize,
 			output.flat.([]float32),
-			getAnyBufAllocator(backend, inputDType), getBufReleaser(backend), backend.workers); err != nil {
+			bufAllocAnyFn, getBufReleaser(backend), backend.workers); err != nil {
 			return nil, err
 		}
 		return output, nil
@@ -518,10 +527,16 @@ func execDotGeneral(backend *Backend, node *Node, inputs []*Buffer, _ []bool) (*
 		// Highway MatMul path for large "malmul" order.
 		inputDType := lhs.shape.DType
 		outputDType := output.shape.DType
-		err = highway.MatMulDynamic(inputDType, outputDType, lhs.flat, rhs.flat,
+		bufAllocAnyFn, err1 := getAnyBufAllocator(backend, inputDType)
+		if err1 != nil {
+			return nil, err1
+		}
+		if err := highway.MatMulDynamic(inputDType, outputDType, lhs.flat, rhs.flat,
 			params.batchSize, params.lhsCrossSize, params.rhsCrossSize, params.contractingSize,
 			output.flat,
-			getAnyBufAllocator(backend, inputDType), getBufReleaser(backend), backend.workers)
+			bufAllocAnyFn, getBufReleaser(backend), backend.workers); err != nil {
+			return nil, err
+		}
 		return output, nil
 
 	default:
@@ -622,21 +637,23 @@ func getBufAllocator[T dtypes.NumberNotComplex](backend *Backend) (packgemm.BufA
 			fnErr = err
 			return nil, nil
 		}
-		return buf, buf.flat.([]T)
+		return buf, buf.flat.([]T) //nolint:errcheck // Cast is ok.
 	}
 	return fnRes, fnErr
 }
 
 // getAnyBufAllocator returns a buffer allocator for the given dtype.
-// TODO: change signature to return the error
-func getAnyBufAllocator(backend *Backend, dtype dtypes.DType) packgemm.BufAllocAnyFn {
-	return func(size int) (ref any, data any) {
+func getAnyBufAllocator(backend *Backend, dtype dtypes.DType) (packgemm.BufAllocAnyFn, error) {
+	var fnErr error
+	fnRes := func(size int) (ref any, data any) {
 		buf, err := backend.getBuffer(dtype, size)
 		if err != nil {
+			fnErr = err
 			return nil, nil
 		}
 		return buf, buf.flat
 	}
+	return fnRes, fnErr
 }
 
 // getBufReleaser returns a buffer releaser for the given numeric type.
